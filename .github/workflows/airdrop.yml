@@ -1,0 +1,25 @@
+name: Solana Devnet Airdrop
+on:
+  workflow_dispatch:
+
+jobs:
+  airdrop:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Request 2 SOL on devnet
+        run: |
+          ADDR="7wVcBsMbCRL7WHegGbxgkXJaN9GkkRDhABj5BaPaa7NY"
+          for ep in "https://api.devnet.solana.com" "https://api.testnet.solana.com"; do
+            echo "==> Trying $ep"
+            RES=$(curl -sf --max-time 10 -X POST "$ep" \
+              -H "Content-Type: application/json" \
+              -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"requestAirdrop\",\"params\":[\"$ADDR\",2000000000]}")
+            echo "Result: $RES"
+            if echo "$RES" | grep -q '"result"'; then echo "SUCCESS"; break; fi
+          done
+      - name: Check balance
+        run: |
+          sleep 6
+          curl -s -X POST https://api.devnet.solana.com \
+            -H "Content-Type: application/json" \
+            -d '{"jsonrpc":"2.0","id":1,"method":"getBalance","params":["7wVcBsMbCRL7WHegGbxgkXJaN9GkkRDhABj5BaPaa7NY"]}'
