@@ -1,25 +1,76 @@
-name: Solana Devnet Airdrop
+name: Solana Multi-Source Airdrop
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
 
 jobs:
   airdrop:
     runs-on: ubuntu-latest
     steps:
-      - name: Request 2 SOL on devnet
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)" || true
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Try all SOL airdrop sources
         run: |
           ADDR="7wVcBsMbCRL7WHegGbxgkXJaN9GkkRDhABj5BaPaa7NY"
-          for ep in "https://api.devnet.solana.com" "https://api.testnet.solana.com"; do
-            echo "==> Trying $ep"
-            RES=$(curl -sf --max-time 10 -X POST "$ep" \
+          CLAIMED=0
+
+          try_rpc() {
+            local EP="$1"
+            local LABEL="$2"
+            echo "==> [$LABEL] $EP"
+            RES=$(curl -s --max-time 12 -X POST "$EP" \
               -H "Content-Type: application/json" \
-              -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"requestAirdrop\",\"params\":[\"$ADDR\",2000000000]}")
-            echo "Result: $RES"
-            if echo "$RES" | grep -q '"result"'; then echo "SUCCESS"; break; fi
-          done
-      - name: Check balance
+              -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"requestAirdrop\",\"params\":[\"$ADDR\",2000000000]}") || true
+            echo "    Result: ${RES:0:120}"
+            if echo "$RES" | grep -q '"result"'; then
+              echo "    ✓ SUCCESS via $LABEL"
+              CLAIMED=1
+            fi
+          }
+
+          # Strategy 1: Raw RPC devnet (multiple shards)
+          try_rpc "https://api.devnet.solana.com" "devnet-main"
+          try_rpc "https://api.testnet.solana.com" "testnet"
+
+          # Strategy 2: Solana CLI (different retry logic)
+          if [ $CLAIMED -eq 0 ]; then
+            echo "==> [solana-cli] Trying CLI airdrop..."
+            ~/.local/share/solana/install/active_release/bin/solana airdrop 2 "$ADDR" --url devnet 2>&1 || true
+            ~/.local/share/solana/install/active_release/bin/solana airdrop 2 "$ADDR" --url testnet 2>&1 || true
+          fi
+
+          # Strategy 3: Alternative RPC providers that allow airdrop
+          try_rpc "https://rpc.ankr.com/solana_devnet/public" "ankr-devnet"
+
+          # Strategy 4: Hammer with small amounts
+          if [ $CLAIMED -eq 0 ]; then
+            for AMOUNT in 500000000 100000000 10000000; do
+              RES=$(curl -s --max-time 10 -X POST "https://api.devnet.solana.com" \
+                -H "Content-Type: application/json" \
+                -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"requestAirdrop\",\"params\":[\"$ADDR\",$AMOUNT]}") || true
+              if echo "$RES" | grep -q '"result"'; then
+                echo "✓ Got $(echo $AMOUNT / 1000000000 | bc).$(echo $AMOUNT % 1000000000 | awk '{printf "%09d", $1}') SOL"
+                CLAIMED=1
+                break
+              fi
+            done
+          fi
+
+          echo "==> Done. Claimed: $CLAIMED"
+
+      - name: Check balances
         run: |
-          sleep 6
+          sleep 8
+          echo "--- Devnet ---"
           curl -s -X POST https://api.devnet.solana.com \
+            -H "Content-Type: application/json" \
+            -d '{"jsonrpc":"2.0","id":1,"method":"getBalance","params":["7wVcBsMbCRL7WHegGbxgkXJaN9GkkRDhABj5BaPaa7NY"]}'
+          echo ""
+          echo "--- Testnet ---"
+          curl -s -X POST https://api.testnet.solana.com \
             -H "Content-Type: application/json" \
             -d '{"jsonrpc":"2.0","id":1,"method":"getBalance","params":["7wVcBsMbCRL7WHegGbxgkXJaN9GkkRDhABj5BaPaa7NY"]}'
